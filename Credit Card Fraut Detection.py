@@ -41,7 +41,3 @@ y_preds = card_model.predict(X_test_scaled)
 overall_accuracy = accuracy_score(y_test, y_preds)
 print(f"Accuracy: {overall_accuracy:.4f}")
 # 8. Save submission file
-"""submission.to_csv("C:/Users/hichr/OneDrive/Bureau/Kaagle/Titanic/gender_submission.csv", index=False)
-print("✅ Submission saved as 'gender_submission.csv'")
-
-print("h")"""
