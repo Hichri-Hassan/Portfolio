@@ -1,3 +1,14 @@
+"""testtt.py – Actionable Stock Trading Prediction System.
+
+This module contains the `ActionableTradingPredictor` class and a CLI-style `main` entry-point. It implements a complete pipeline for:
+1. Comprehensive feature engineering with 100+ technical/statistical indicators.
+2. Actionable target generation that forces ~20 % BUY and ~20 % SELL labels.
+3. Advanced preprocessing (outlier handling, scaling, feature selection).
+4. Model building (tree ensembles, linear models, neural nets, XGBoost, LightGBM) and ensembling.
+5. Robust evaluation including time-series CV, detailed metrics, and visualizations.
+
+The design goal is to maximise practical trading actionability while preserving predictive accuracy.
+"""
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import RobustScaler, StandardScaler, MinMaxScaler
@@ -92,6 +103,7 @@ class ActionableTradingPredictor:
         
         # Multiple RSI periods
         def calculate_rsi(prices, period=14):
+            """Calculate the Relative Strength Index (RSI) for a price series."""
             delta = prices.diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=period, min_periods=1).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=period, min_periods=1).mean()
@@ -105,6 +117,7 @@ class ActionableTradingPredictor:
         
         # Stochastic Oscillator
         def calculate_stochastic(high, low, close, k_period=14, d_period=3):
+            """Compute %K and %D values for the Stochastic Oscillator."""
             lowest_low = low.rolling(k_period, min_periods=1).min()
             highest_high = high.rolling(k_period, min_periods=1).max()
             k_percent = 100 * ((close - lowest_low) / (highest_high - lowest_low + 1e-10))
@@ -125,6 +138,7 @@ class ActionableTradingPredictor:
         
         # Enhanced MACD with multiple timeframes
         def calculate_macd(prices, fast=12, slow=26, signal=9):
+            """Return MACD line, signal line, and histogram for a price series."""
             ema_fast = prices.ewm(span=fast).mean()
             ema_slow = prices.ewm(span=slow).mean()
             macd = ema_fast - ema_slow
@@ -162,6 +176,7 @@ class ActionableTradingPredictor:
         
         # Enhanced Bollinger Bands
         def calculate_bb(prices, period=20, std_dev=2):
+            """Calculate Bollinger Bands (upper, middle SMA, lower)."""
             sma = prices.rolling(period, min_periods=1).mean()
             std = prices.rolling(period, min_periods=1).std()
             upper = sma + (std * std_dev)
@@ -187,6 +202,7 @@ class ActionableTradingPredictor:
         
         # Williams %R
         def calculate_williams_r(high, low, close, period=14):
+            """Compute Williams %R momentum oscillator."""
             highest_high = high.rolling(period, min_periods=1).max()
             lowest_low = low.rolling(period, min_periods=1).min()
             williams_r = -100 * ((highest_high - close) / (highest_high - lowest_low + 1e-10))
@@ -199,6 +215,7 @@ class ActionableTradingPredictor:
         
         # Commodity Channel Index (CCI)
         def calculate_cci(high, low, close, period=20):
+            """Calculate the Commodity Channel Index (CCI)."""
             tp = (high + low + close) / 3
             sma_tp = tp.rolling(period, min_periods=1).mean()
             mad = tp.rolling(period, min_periods=1).apply(lambda x: np.mean(np.abs(x - x.mean())))
@@ -312,6 +329,7 @@ class ActionableTradingPredictor:
         
         # Enhanced comprehensive scoring system
         def calculate_action_score(row):
+            """Aggregate multiple indicator signals into a single action score."""
             score = 0
             
             # Multi-horizon future returns (35% weight)
