@@ -1,0 +1,21 @@
+"""
+Actionable Trading Predictor System
+
+This module implements a comprehensive machine learning system for stock trading predictions.
+The system is designed to provide actionable signals (BUY/SELL/HOLD) while maintaining
+high accuracy and practical trading frequency.
+
+Key Features:
+- Advanced feature engineering with 100+ technical indicators
+- Multi-horizon risk-adjusted target creation
+- Sophisticated preprocessing with adaptive scaling
+- Ensemble learning with multiple ML algorithms
+- Time-series cross-validation
+- Comprehensive evaluation metrics
+
+The system targets approximately 20% BUY and 20% SELL signals, leaving 60% as HOLD.
+
+Author: Trading AI System
+Version: 2.0 - Enhanced Documentation
+"""
+
