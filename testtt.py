@@ -1,21 +1,64 @@
+"""
+Enhanced Actionable Trading Predictor for IEEE Publication
+=========================================================
+
+A comprehensive machine learning framework for stock trading signal prediction
+with advanced feature engineering, ensemble methods, and robust validation.
+
+Authors: [Your Name]
+Date: 2025
+Version: 2.0
+
+This module implements an enhanced trading prediction system that:
+1. Generates actionable BUY/SELL/HOLD signals with 20% BUY and 20% SELL targets
+2. Uses advanced technical indicators and statistical features
+3. Employs multiple ML algorithms with ensemble methods
+4. Includes robust time-series validation and comprehensive evaluation
+5. Provides detailed visualization and analysis capabilities
+
+Key Features:
+- 100+ engineered features from technical analysis
+- Risk-adjusted target creation with multi-horizon returns
+- Advanced preprocessing with adaptive scaling and feature selection
+- Multiple ML models including XGBoost, LightGBM, and ensemble methods
+- Time-series cross-validation preserving temporal structure
+- Comprehensive visualization and performance analysis
+- Automated experiment logging and reproducibility controls
+"""
+
+# Standard library imports
+import os
+import sys
+import json
+import pickle
+import logging
+import warnings
+from datetime import datetime
+from typing import Dict, List, Tuple, Optional, Union, Any
+from pathlib import Path
+
+# Third-party imports
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.stats import skew, kurtosis, zscore, normaltest, jarque_bera
+from scipy import stats
+
+# Scikit-learn imports
 from sklearn.preprocessing import RobustScaler, StandardScaler, MinMaxScaler
 from sklearn.feature_selection import SelectKBest, mutual_info_classif, VarianceThreshold, RFE
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, ExtraTreesClassifier, VotingClassifier, AdaBoostClassifier
+from sklearn.ensemble import (RandomForestClassifier, GradientBoostingClassifier,
+                            ExtraTreesClassifier, VotingClassifier, AdaBoostClassifier)
 from sklearn.linear_model import LogisticRegression, RidgeClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, balanced_accuracy_score, classification_report, confusion_matrix
 from sklearn.neural_network import MLPClassifier
 from sklearn.model_selection import TimeSeriesSplit, cross_val_score, GridSearchCV
 from sklearn.utils.class_weight import compute_class_weight
-import warnings
-import os
-from datetime import datetime
-from scipy.stats import skew, kurtosis, zscore
-from scipy import stats
-import matplotlib.pyplot as plt
-import seaborn as sns
+from sklearn.metrics import (accuracy_score, precision_score, recall_score, f1_score,
+                           balanced_accuracy_score, classification_report, confusion_matrix,
+                           roc_auc_score, roc_curve, precision_recall_curve)
 
+# Optional advanced ML libraries
 try:
     import xgboost as xgb
     XGBOOST_AVAILABLE = True
@@ -30,17 +73,641 @@ except ImportError:
     LIGHTGBM_AVAILABLE = False
     print("⚠️ LightGBM not available. Install with: pip install lightgbm")
 
+# Configuration and constants
 warnings.filterwarnings('ignore')
+plt.style.use('seaborn-v0_8' if 'seaborn-v0_8' in plt.style.available else 'default')
+sns.set_palette("husl")
+
+# Global configuration for reproducibility
+RANDOM_SEED = 42
+np.random.seed(RANDOM_SEED)
+
+# Logging configuration
+def setup_logging(log_level: str = "INFO", log_file: Optional[str] = None) -> logging.Logger:
+    """
+    Set up comprehensive logging for the trading predictor.
+    
+    Args:
+        log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        log_file: Optional log file path. If None, logs to console only.
+    
+    Returns:
+        Configured logger instance
+    """
+    logger = logging.getLogger('TradingPredictor')
+    logger.setLevel(getattr(logging, log_level.upper()))
+    
+    # Clear existing handlers
+    logger.handlers.clear()
+    
+    # Create formatter
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
+    )
+    
+    # Console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    
+    # File handler (optional)
+    if log_file:
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    
+    return logger
+
+# Initialize logger
+logger = setup_logging("INFO", f"trading_predictor_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+
+class ExperimentLogger:
+    """
+    Automated experiment logging system for reproducibility and analysis.
+    
+    This class handles:
+    - Parameter logging and serialization
+    - Metrics tracking across experiments
+    - Model artifact saving
+    - Visualization export
+    - Experiment comparison utilities
+    """
+    
+    def __init__(self, experiment_name: str, base_dir: str = "experiments"):
+        """
+        Initialize experiment logger.
+        
+        Args:
+            experiment_name: Name of the current experiment
+            base_dir: Base directory for experiment storage
+        """
+        self.experiment_name = experiment_name
+        self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.experiment_id = f"{experiment_name}_{self.timestamp}"
+        
+        # Create experiment directory
+        self.experiment_dir = Path(base_dir) / self.experiment_id
+        self.experiment_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize experiment metadata
+        self.metadata = {
+            'experiment_name': experiment_name,
+            'experiment_id': self.experiment_id,
+            'timestamp': self.timestamp,
+            'random_seed': RANDOM_SEED,
+            'python_version': sys.version,
+            'numpy_version': np.__version__,
+            'pandas_version': pd.__version__,
+            'sklearn_version': None,  # Will be set later
+            'parameters': {},
+            'metrics': {},
+            'artifacts': []
+        }
+        
+        logger.info(f"Initialized experiment: {self.experiment_id}")
+    
+    def log_parameters(self, params: Dict[str, Any]) -> None:
+        """Log experiment parameters."""
+        self.metadata['parameters'].update(params)
+        logger.info(f"Logged parameters: {list(params.keys())}")
+    
+    def log_metrics(self, metrics: Dict[str, float]) -> None:
+        """Log experiment metrics."""
+        self.metadata['metrics'].update(metrics)
+        logger.info(f"Logged metrics: {list(metrics.keys())}")
+    
+    def save_artifact(self, obj: Any, filename: str, artifact_type: str = "pickle") -> str:
+        """
+        Save experiment artifact.
+        
+        Args:
+            obj: Object to save
+            filename: Filename for the artifact
+            artifact_type: Type of artifact (pickle, json, csv, etc.)
+        
+        Returns:
+            Path to saved artifact
+        """
+        filepath = self.experiment_dir / filename
+        
+        try:
+            if artifact_type == "pickle":
+                with open(filepath, 'wb') as f:
+                    pickle.dump(obj, f)
+            elif artifact_type == "json":
+                with open(filepath, 'w') as f:
+                    json.dump(obj, f, indent=2, default=str)
+            elif artifact_type == "csv" and hasattr(obj, 'to_csv'):
+                obj.to_csv(filepath, index=True)
+            else:
+                raise ValueError(f"Unsupported artifact type: {artifact_type}")
+            
+            self.metadata['artifacts'].append({
+                'filename': filename,
+                'type': artifact_type,
+                'timestamp': datetime.now().isoformat()
+            })
+            
+            logger.info(f"Saved artifact: {filename}")
+            return str(filepath)
+            
+        except Exception as e:
+            logger.error(f"Failed to save artifact {filename}: {e}")
+            raise
+    
+    def save_plot(self, fig: plt.Figure, filename: str, dpi: int = 300) -> str:
+        """Save matplotlib figure as artifact."""
+        filepath = self.experiment_dir / filename
+        fig.savefig(filepath, dpi=dpi, bbox_inches='tight')
+        
+        self.metadata['artifacts'].append({
+            'filename': filename,
+            'type': 'plot',
+            'timestamp': datetime.now().isoformat()
+        })
+        
+        logger.info(f"Saved plot: {filename}")
+        return str(filepath)
+    
+    def finalize_experiment(self) -> str:
+        """Finalize experiment and save metadata."""
+        metadata_path = self.experiment_dir / "experiment_metadata.json"
+        
+        with open(metadata_path, 'w') as f:
+            json.dump(self.metadata, f, indent=2, default=str)
+        
+        logger.info(f"Experiment finalized: {self.experiment_id}")
+        return str(metadata_path)
+
+def validate_input_data(df: pd.DataFrame, required_columns: List[str],
+                       allow_null_columns: bool = True, min_rows: int = 100) -> None:
+    """
+    Validate input data for the trading predictor with flexible validation rules.
+    
+    Args:
+        df: Input DataFrame
+        required_columns: List of required column names
+        allow_null_columns: Whether to allow columns with all null values
+        min_rows: Minimum number of rows required
+    
+    Raises:
+        ValueError: If validation fails
+    """
+    if df is None or df.empty:
+        raise ValueError("Input DataFrame is None or empty")
+    
+    if not isinstance(df, pd.DataFrame):
+        raise ValueError("Input must be a pandas DataFrame")
+    
+    # Check for required columns
+    missing_columns = set(required_columns) - set(df.columns)
+    if missing_columns:
+        raise ValueError(f"Missing required columns: {missing_columns}")
+    
+    # Check if required columns have all null values
+    required_null_columns = []
+    for col in required_columns:
+        if col in df.columns and df[col].isnull().all():
+            required_null_columns.append(col)
+    
+    if required_null_columns:
+        raise ValueError(f"Required columns with all null values: {required_null_columns}")
+    
+    # Optionally check for any columns with all null values (warning only)
+    if not allow_null_columns:
+        null_columns = df.columns[df.isnull().all()].tolist()
+        if null_columns:
+            raise ValueError(f"Columns with all null values: {null_columns}")
+    else:
+        # Just log a warning for null columns
+        null_columns = df.columns[df.isnull().all()].tolist()
+        if null_columns:
+            logger.warning(f"Found columns with all null values (will be ignored): {null_columns}")
+    
+    # Check minimum rows
+    if len(df) < min_rows:
+        raise ValueError(f"Dataset too small. Has {len(df)} rows, minimum {min_rows} required.")
+    
+    # Check for completely empty dataset
+    if df.select_dtypes(include=[np.number]).empty:
+        raise ValueError("No numeric columns found in dataset")
+    
+    logger.info(f"Input validation passed. Shape: {df.shape}")
+    if null_columns:
+        logger.info(f"Note: {len(null_columns)} columns with all null values will be handled during preprocessing")
+
+def set_random_seeds(seed: int = RANDOM_SEED) -> None:
+    """
+    Set random seeds for reproducibility across all libraries.
+    
+    Args:
+        seed: Random seed value
+    """
+    np.random.seed(seed)
+    
+    # Set seeds for optional libraries if available
+    try:
+        import random
+        random.seed(seed)
+    except ImportError:
+        pass
+    
+    try:
+        import tensorflow as tf
+        tf.random.set_seed(seed)
+    except ImportError:
+        pass
+    
+    try:
+        import torch
+        torch.manual_seed(seed)
+    except ImportError:
+        pass
+    
+    logger.info(f"Random seeds set to {seed}")
+
+class DataExplorer:
+    """
+    Comprehensive data exploration and visualization utilities for financial data.
+    
+    This class provides methods for:
+    - Statistical analysis and distribution visualization
+    - Correlation analysis and feature relationships
+    - Time series analysis and trend detection
+    - Class distribution analysis
+    - Feature importance and selection insights
+    """
+    
+    def __init__(self, experiment_logger: Optional[ExperimentLogger] = None):
+        """
+        Initialize DataExplorer.
+        
+        Args:
+            experiment_logger: Optional experiment logger for saving artifacts
+        """
+        self.experiment_logger = experiment_logger
+        self.logger = logging.getLogger(f'{__name__}.DataExplorer')
+        
+    def explore_dataset_overview(self, df: pd.DataFrame, save_plots: bool = True) -> Dict[str, Any]:
+        """
+        Generate comprehensive dataset overview with statistics and visualizations.
+        
+        Args:
+            df: Input DataFrame
+            save_plots: Whether to save generated plots
+            
+        Returns:
+            Dictionary containing exploration results
+        """
+        self.logger.info("Starting dataset overview exploration")
+        
+        try:
+            # Basic statistics
+            overview = {
+                'shape': df.shape,
+                'memory_usage_mb': df.memory_usage(deep=True).sum() / 1024**2,
+                'dtypes': df.dtypes.value_counts().to_dict(),
+                'missing_values': df.isnull().sum().to_dict(),
+                'duplicate_rows': df.duplicated().sum(),
+                'numeric_columns': df.select_dtypes(include=[np.number]).columns.tolist(),
+                'categorical_columns': df.select_dtypes(include=['object', 'category']).columns.tolist()
+            }
+            
+            # Statistical summary for numeric columns
+            numeric_df = df.select_dtypes(include=[np.number])
+            if not numeric_df.empty:
+                overview['numeric_summary'] = numeric_df.describe().to_dict()
+                
+                # Distribution analysis
+                overview['distribution_analysis'] = {}
+                for col in numeric_df.columns:
+                    col_data = numeric_df[col].dropna()
+                    if len(col_data) > 0:
+                        # Normality tests
+                        try:
+                            _, jb_p_value = jarque_bera(col_data)
+                            _, norm_p_value = normaltest(col_data)
+                        except:
+                            jb_p_value = norm_p_value = np.nan
+                        
+                        overview['distribution_analysis'][col] = {
+                            'skewness': skew(col_data),
+                            'kurtosis': kurtosis(col_data),
+                            'jarque_bera_p_value': jb_p_value,
+                            'normaltest_p_value': norm_p_value,
+                            'is_normal_jb': jb_p_value > 0.05 if not np.isnan(jb_p_value) else False,
+                            'is_normal_nt': norm_p_value > 0.05 if not np.isnan(norm_p_value) else False
+                        }
+            
+            # Create visualizations
+            if save_plots:
+                self._create_overview_plots(df, overview)
+            
+            self.logger.info("Dataset overview exploration completed")
+            return overview
+            
+        except Exception as e:
+            self.logger.error(f"Error in dataset overview exploration: {e}")
+            raise
+    
+    def _create_overview_plots(self, df: pd.DataFrame, overview: Dict[str, Any]) -> None:
+        """Create and save overview plots."""
+        numeric_df = df.select_dtypes(include=[np.number])
+        
+        if numeric_df.empty:
+            return
+        
+        # 1. Missing values heatmap
+        fig, ax = plt.subplots(figsize=(12, 8))
+        missing_data = df.isnull()
+        if missing_data.any().any():
+            sns.heatmap(missing_data, cbar=True, ax=ax, cmap='viridis')
+            ax.set_title('Missing Values Heatmap', fontsize=16, fontweight='bold')
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            
+            if self.experiment_logger:
+                self.experiment_logger.save_plot(fig, 'missing_values_heatmap.png')
+            plt.close()
+        
+        # 2. Distribution plots for key numeric features
+        n_cols = min(4, len(numeric_df.columns))
+        n_rows = min(4, (len(numeric_df.columns) + n_cols - 1) // n_cols)
+        
+        if n_rows > 0 and n_cols > 0:
+            fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 4*n_rows))
+            axes = axes.flatten() if n_rows * n_cols > 1 else [axes]
+            
+            for i, col in enumerate(numeric_df.columns[:n_rows*n_cols]):
+                col_data = numeric_df[col].dropna()
+                if len(col_data) > 0:
+                    axes[i].hist(col_data, bins=50, alpha=0.7, edgecolor='black')
+                    axes[i].set_title(f'{col}\nSkew: {skew(col_data):.3f}', fontweight='bold')
+                    axes[i].set_xlabel(col)
+                    axes[i].set_ylabel('Frequency')
+                    axes[i].grid(True, alpha=0.3)
+            
+            # Hide unused subplots
+            for i in range(len(numeric_df.columns), len(axes)):
+                axes[i].set_visible(False)
+            
+            plt.suptitle('Feature Distributions', fontsize=16, fontweight='bold')
+            plt.tight_layout()
+            
+            if self.experiment_logger:
+                self.experiment_logger.save_plot(fig, 'feature_distributions.png')
+            plt.close()
+    
+    def analyze_correlations(self, df: pd.DataFrame, target_col: Optional[str] = None,
+                           threshold: float = 0.8, save_plots: bool = True) -> Dict[str, Any]:
+        """
+        Comprehensive correlation analysis with visualizations.
+        
+        Args:
+            df: Input DataFrame
+            target_col: Optional target column for target correlation analysis
+            threshold: Correlation threshold for identifying highly correlated features
+            save_plots: Whether to save generated plots
+            
+        Returns:
+            Dictionary containing correlation analysis results
+        """
+        self.logger.info("Starting correlation analysis")
+        
+        try:
+            numeric_df = df.select_dtypes(include=[np.number])
+            
+            if numeric_df.empty:
+                self.logger.warning("No numeric columns found for correlation analysis")
+                return {}
+            
+            # Calculate correlation matrix
+            corr_matrix = numeric_df.corr()
+            
+            # Find highly correlated pairs
+            high_corr_pairs = []
+            for i in range(len(corr_matrix.columns)):
+                for j in range(i+1, len(corr_matrix.columns)):
+                    corr_val = corr_matrix.iloc[i, j]
+                    if abs(corr_val) >= threshold:
+                        high_corr_pairs.append({
+                            'feature1': corr_matrix.columns[i],
+                            'feature2': corr_matrix.columns[j],
+                            'correlation': corr_val
+                        })
+            
+            # Target correlations (if target provided)
+            target_correlations = {}
+            if target_col and target_col in numeric_df.columns:
+                target_correlations = corr_matrix[target_col].drop(target_col).to_dict()
+                target_correlations = {k: v for k, v in sorted(target_correlations.items(),
+                                                             key=lambda x: abs(x[1]), reverse=True)}
+            
+            results = {
+                'correlation_matrix': corr_matrix.to_dict(),
+                'high_correlation_pairs': high_corr_pairs,
+                'target_correlations': target_correlations,
+                'correlation_stats': {
+                    'mean_abs_correlation': corr_matrix.abs().mean().mean(),
+                    'max_correlation': corr_matrix.abs().max().max(),
+                    'highly_correlated_pairs_count': len(high_corr_pairs)
+                }
+            }
+            
+            # Create visualizations
+            if save_plots:
+                self._create_correlation_plots(corr_matrix, target_col, target_correlations)
+            
+            self.logger.info(f"Correlation analysis completed. Found {len(high_corr_pairs)} highly correlated pairs")
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Error in correlation analysis: {e}")
+            raise
+    
+    def _create_correlation_plots(self, corr_matrix: pd.DataFrame, target_col: Optional[str],
+                                target_correlations: Dict[str, float]) -> None:
+        """Create and save correlation plots."""
+        
+        # 1. Full correlation heatmap
+        plt.figure(figsize=(12, 10))
+        mask = np.triu(np.ones_like(corr_matrix, dtype=bool))
+        sns.heatmap(corr_matrix, mask=mask, annot=False, cmap='coolwarm', center=0,
+                   square=True, linewidths=0.5, cbar_kws={"shrink": 0.8})
+        plt.title('Feature Correlation Matrix', fontsize=16, fontweight='bold')
+        plt.tight_layout()
+        
+        if self.experiment_logger:
+            self.experiment_logger.save_plot(plt.gcf(), 'correlation_matrix.png')
+        plt.close()
+        
+        # 2. Target correlations (if available)
+        if target_col and target_correlations:
+            top_n = min(20, len(target_correlations))
+            top_correlations = dict(list(target_correlations.items())[:top_n])
+            
+            plt.figure(figsize=(10, 8))
+            features = list(top_correlations.keys())
+            correlations = list(top_correlations.values())
+            
+            colors = ['red' if x < 0 else 'blue' for x in correlations]
+            bars = plt.barh(range(len(features)), correlations, color=colors, alpha=0.7)
+            
+            plt.yticks(range(len(features)), features)
+            plt.xlabel('Correlation with Target')
+            plt.title(f'Top {top_n} Features Correlated with {target_col}',
+                     fontsize=16, fontweight='bold')
+            plt.grid(axis='x', alpha=0.3)
+            
+            # Add value labels
+            for i, (bar, corr) in enumerate(zip(bars, correlations)):
+                plt.text(corr + 0.01 if corr >= 0 else corr - 0.01, i, f'{corr:.3f}',
+                        va='center', ha='left' if corr >= 0 else 'right')
+            
+            plt.tight_layout()
+            
+            if self.experiment_logger:
+                self.experiment_logger.save_plot(plt.gcf(), 'target_correlations.png')
+            plt.close()
 
 class ActionableTradingPredictor:
     """
-    Actionable Trading Predictor that forces 20% BUY and 20% SELL signals while maintaining accuracy
+    Enhanced Actionable Trading Predictor for IEEE Publication Standards.
+    
+    This class implements a comprehensive machine learning framework for stock trading
+    signal prediction with the following key features:
+    
+    1. **Actionable Signal Generation**: Forces specific percentages of BUY/SELL signals
+       (default: 20% BUY, 20% SELL, 60% HOLD) to ensure practical trading applicability
+    
+    2. **Advanced Feature Engineering**: Creates 100+ technical indicators including:
+       - Multiple timeframe moving averages (SMA, EMA, VWMA)
+       - Technical oscillators (RSI, MACD, Stochastic, Williams %R, CCI)
+       - Bollinger Bands with multiple periods
+       - Volume-based indicators and statistical features
+       - Market-relative features and risk-adjusted metrics
+    
+    3. **Sophisticated Target Creation**: Uses multi-horizon risk-adjusted returns
+       with adaptive thresholds based on market volatility regimes
+    
+    4. **Robust Preprocessing**: Implements adaptive scaling, outlier detection,
+       correlation-based feature selection, and recursive feature elimination
+    
+    5. **Advanced Model Portfolio**: Includes optimized implementations of:
+       - Tree-based models (RandomForest, ExtraTrees, GradientBoosting)
+       - Gradient boosting variants (XGBoost, LightGBM)
+       - Neural networks and linear models
+       - Sophisticated ensemble methods
+    
+    6. **Time-Series Validation**: Preserves temporal structure with proper
+       train/validation/test splits and time-series cross-validation
+    
+    7. **Comprehensive Evaluation**: Provides detailed metrics including
+       class-specific F1 scores, balanced accuracy, and actionability measures
+    
+    Attributes:
+        random_state (int): Random seed for reproducibility
+        experiment_logger (ExperimentLogger): Logger for experiment tracking
+        data_explorer (DataExplorer): Data exploration utilities
+        scaler (sklearn.preprocessing): Fitted data scaler
+        feature_selector (sklearn.feature_selection): Fitted feature selector
+        models (Dict): Trained model instances
+        preprocessing_artifacts (Dict): Preprocessing metadata and artifacts
     """
     
-    def __init__(self, random_state=42):
+    def __init__(self, random_state: int = RANDOM_SEED,
+                 experiment_name: Optional[str] = None,
+                 enable_logging: bool = True,
+                 enable_data_exploration: bool = True):
+        """
+        Initialize the Enhanced Actionable Trading Predictor.
+        
+        Args:
+            random_state: Random seed for reproducibility across all operations
+            experiment_name: Name for experiment logging (auto-generated if None)
+            enable_logging: Whether to enable comprehensive experiment logging
+            enable_data_exploration: Whether to enable data exploration features
+            
+        Raises:
+            ValueError: If random_state is not a valid integer
+        """
+        # Input validation
+        if not isinstance(random_state, int) or random_state < 0:
+            raise ValueError("random_state must be a non-negative integer")
+        
+        # Set random seeds for reproducibility
         self.random_state = random_state
+        set_random_seeds(random_state)
+        
+        # Initialize logging
+        self.logger = logging.getLogger(f'{__name__}.ActionableTradingPredictor')
+        self.logger.info(f"Initializing ActionableTradingPredictor with random_state={random_state}")
+        
+        # Initialize experiment logging
+        if enable_logging:
+            exp_name = experiment_name or f"trading_prediction_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            self.experiment_logger = ExperimentLogger(exp_name)
+            self.experiment_logger.log_parameters({
+                'random_state': random_state,
+                'model_class': self.__class__.__name__,
+                'initialization_time': datetime.now().isoformat()
+            })
+        else:
+            self.experiment_logger = None
+        
+        # Initialize data exploration
+        if enable_data_exploration:
+            self.data_explorer = DataExplorer(self.experiment_logger)
+        else:
+            self.data_explorer = None
+        
+        # Initialize model components (will be set during training)
         self.scaler = None
         self.feature_selector = None
+        self.variance_selector = None
+        self.correlation_mask = None
+        self.rfe_selector = None
+        self.use_rfe = False
+        self.models = {}
+        self.preprocessing_artifacts = {}
+        
+        # Configuration parameters
+        self.config = {
+            'target_buy_pct': 20,
+            'target_sell_pct': 20,
+            'feature_selection_threshold': 0.01,
+            'correlation_threshold': 0.95,
+            'max_features': 50,
+            'outlier_method': 'adaptive',
+            'scaling_method': 'adaptive'
+        }
+        
+        self.logger.info("ActionableTradingPredictor initialized successfully")
+    
+    def set_config(self, **kwargs) -> None:
+        """
+        Update configuration parameters.
+        
+        Args:
+            **kwargs: Configuration parameters to update
+            
+        Example:
+            predictor.set_config(target_buy_pct=25, max_features=30)
+        """
+        for key, value in kwargs.items():
+            if key in self.config:
+                old_value = self.config[key]
+                self.config[key] = value
+                self.logger.info(f"Updated config: {key} = {value} (was {old_value})")
+                
+                if self.experiment_logger:
+                    self.experiment_logger.log_parameters({f'config_{key}': value})
+            else:
+                self.logger.warning(f"Unknown configuration parameter: {key}")
+    
+    def get_config(self) -> Dict[str, Any]:
+        """Get current configuration parameters."""
+        return self.config.copy()
         
     def comprehensive_feature_engineering(self, df):
         """Enhanced feature engineering with advanced technical indicators and statistical features"""
@@ -284,16 +951,34 @@ class ActionableTradingPredictor:
         features_df = features_df.replace([np.inf, -np.inf], np.nan)
         numeric_columns = features_df.select_dtypes(include=[np.number]).columns
         
+        # Handle columns with all null values
+        all_null_columns = []
         for col in numeric_columns:
+            if features_df[col].isna().all():
+                all_null_columns.append(col)
+                # Drop columns that are completely null
+                features_df = features_df.drop(col, axis=1)
+                continue
+            
             if features_df[col].isna().any():
                 # Forward fill, then backward fill within each ticker
                 features_df[col] = features_df.groupby('Ticker')[col].fillna(method='ffill').fillna(method='bfill')
                 # If still NaN, use median
                 if features_df[col].isna().any():
                     median_val = features_df[col].median()
-                    features_df[col] = features_df[col].fillna(median_val)
+                    if pd.notna(median_val):
+                        features_df[col] = features_df[col].fillna(median_val)
+                    else:
+                        # If median is also NaN, use 0
+                        features_df[col] = features_df[col].fillna(0)
+        
+        if all_null_columns:
+            logger.warning(f"Dropped {len(all_null_columns)} columns with all null values: {all_null_columns[:5]}{'...' if len(all_null_columns) > 5 else ''}")
         
         print(f"✅ Enhanced feature engineering completed. Shape: {features_df.shape}")
+        if all_null_columns:
+            print(f"   📝 Note: Dropped {len(all_null_columns)} columns with all null values")
+        
         return features_df
     
     def create_actionable_targets(self, df, target_buy_pct=20, target_sell_pct=20):
@@ -1321,7 +2006,379 @@ class ActionableTradingPredictor:
             }
         }
 
+class TradingPredictorTests:
+    """
+    Unit tests for the ActionableTradingPredictor components.
+    
+    This class provides comprehensive testing for key components to ensure
+    reliability and correctness of the trading prediction system.
+    """
+    
+    def __init__(self):
+        """Initialize test suite."""
+        self.logger = logging.getLogger(f'{__name__}.TradingPredictorTests')
+        self.test_results = {}
+    
+    def create_sample_data(self, n_samples: int = 1000, n_tickers: int = 5) -> pd.DataFrame:
+        """
+        Create synthetic financial data for testing.
+        
+        Args:
+            n_samples: Number of data points per ticker
+            n_tickers: Number of different tickers
+            
+        Returns:
+            DataFrame with synthetic financial data
+        """
+        np.random.seed(RANDOM_SEED)
+        
+        data = []
+        tickers = [f'STOCK_{i:02d}' for i in range(n_tickers)]
+        
+        for ticker in tickers:
+            # Generate synthetic price data with realistic patterns
+            dates = pd.date_range('2020-01-01', periods=n_samples, freq='D')
+            
+            # Random walk with drift for price
+            returns = np.random.normal(0.0005, 0.02, n_samples)  # Daily returns
+            prices = 100 * np.exp(np.cumsum(returns))  # Price from returns
+            
+            # Generate OHLC data
+            high = prices * (1 + np.abs(np.random.normal(0, 0.01, n_samples)))
+            low = prices * (1 - np.abs(np.random.normal(0, 0.01, n_samples)))
+            volume = np.random.lognormal(10, 1, n_samples)
+            
+            ticker_data = pd.DataFrame({
+                'Date': dates,
+                'Ticker': ticker,
+                'Open': prices * (1 + np.random.normal(0, 0.005, n_samples)),
+                'High': high,
+                'Low': low,
+                'Close': prices,
+                'Volume': volume
+            })
+            
+            data.append(ticker_data)
+        
+        return pd.concat(data, ignore_index=True)
+    
+    def test_data_validation(self) -> bool:
+        """Test input data validation functionality."""
+        self.logger.info("Testing data validation...")
+        
+        try:
+            # Test valid data
+            valid_data = self.create_sample_data(100, 2)
+            required_cols = ['Date', 'Ticker', 'Close', 'Volume']
+            validate_input_data(valid_data, required_cols)
+            
+            # Test invalid data cases
+            test_cases = [
+                (None, "None input"),
+                (pd.DataFrame(), "Empty DataFrame"),
+                (valid_data.drop('Close', axis=1), "Missing required column"),
+                (valid_data.head(50), "Too few samples")
+            ]
+            
+            for invalid_data, description in test_cases:
+                try:
+                    validate_input_data(invalid_data, required_cols)
+                    self.logger.error(f"Validation should have failed for: {description}")
+                    return False
+                except ValueError:
+                    pass  # Expected behavior
+            
+            self.logger.info("Data validation tests passed")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Data validation test failed: {e}")
+            return False
+    
+    def test_feature_engineering(self) -> bool:
+        """Test feature engineering functionality."""
+        self.logger.info("Testing feature engineering...")
+        
+        try:
+            # Create test data
+            test_data = self.create_sample_data(200, 2)
+            
+            # Initialize predictor
+            predictor = ActionableTradingPredictor(enable_logging=False, enable_data_exploration=False)
+            
+            # Test feature engineering
+            features_df = predictor.comprehensive_feature_engineering(test_data)
+            
+            # Validate results
+            assert features_df.shape[0] == test_data.shape[0], "Row count mismatch"
+            assert features_df.shape[1] > test_data.shape[1], "No new features created"
+            
+            # Check for expected feature types
+            expected_features = ['Return_1D', 'SMA_20', 'RSI_14', 'MACD', 'BB_Position_20']
+            for feature in expected_features:
+                assert feature in features_df.columns, f"Missing expected feature: {feature}"
+            
+            # Check for no infinite values
+            assert not np.isinf(features_df.select_dtypes(include=[np.number])).any().any(), "Infinite values found"
+            
+            self.logger.info("Feature engineering tests passed")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Feature engineering test failed: {e}")
+            return False
+    
+    def run_all_tests(self) -> Dict[str, bool]:
+        """
+        Run all unit tests and return results.
+        
+        Returns:
+            Dictionary with test names and their pass/fail status
+        """
+        self.logger.info("Starting comprehensive unit tests...")
+        
+        tests = [
+            ('data_validation', self.test_data_validation),
+            ('feature_engineering', self.test_feature_engineering)
+        ]
+        
+        results = {}
+        for test_name, test_func in tests:
+            try:
+                results[test_name] = test_func()
+            except Exception as e:
+                self.logger.error(f"Test {test_name} failed with exception: {e}")
+                results[test_name] = False
+        
+        # Summary
+        passed = sum(results.values())
+        total = len(results)
+        self.logger.info(f"Unit tests completed: {passed}/{total} passed")
+        
+        if passed == total:
+            self.logger.info("🎉 All unit tests passed!")
+        else:
+            self.logger.warning(f"⚠️ {total - passed} unit tests failed")
+        
+        return results
+
 def main():
+    """
+    Enhanced main function for IEEE publication-ready stock prediction system.
+    
+    This function demonstrates the complete workflow including:
+    - Comprehensive data exploration and validation
+    - Advanced feature engineering with 100+ indicators
+    - Sophisticated target creation with risk adjustment
+    - Robust preprocessing and feature selection
+    - Advanced model training with ensemble methods
+    - Time-series cross-validation
+    - Comprehensive evaluation and visualization
+    - Automated experiment logging and artifact saving
+    """
+    print("🚀 ENHANCED ACTIONABLE STOCK PREDICTION SYSTEM")
+    print("=" * 70)
+    print("🎯 IEEE Publication-Ready Trading Signal Prediction Framework")
+    print("📊 Features: Advanced ML, Risk-Adjusted Targets, Comprehensive Validation")
+    print("🔬 Includes: Data Exploration, Unit Tests, Experiment Logging")
+    print("=" * 70)
+    
+    # Set random seeds for reproducibility
+    set_random_seeds(RANDOM_SEED)
+    
+    # Run unit tests first
+    print("\n🧪 RUNNING UNIT TESTS")
+    print("-" * 50)
+    test_suite = TradingPredictorTests()
+    test_results = test_suite.run_all_tests()
+    
+    if not all(test_results.values()):
+        print("⚠️ Some unit tests failed. Proceeding with caution...")
+    
+    # Initialize enhanced predictor with full logging
+    experiment_name = f"enhanced_trading_prediction_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    predictor = ActionableTradingPredictor(
+        random_state=RANDOM_SEED,
+        experiment_name=experiment_name,
+        enable_logging=True,
+        enable_data_exploration=True
+    )
+    
+    # Log experiment parameters
+    if predictor.experiment_logger:
+        predictor.experiment_logger.log_parameters({
+            'unit_tests_passed': all(test_results.values()),
+            'failed_tests': [k for k, v in test_results.items() if not v],
+            'system_info': {
+                'python_version': sys.version,
+                'numpy_version': np.__version__,
+                'pandas_version': pd.__version__,
+                'xgboost_available': XGBOOST_AVAILABLE,
+                'lightgbm_available': LIGHTGBM_AVAILABLE
+            }
+        })
+    
+    # Continue with original main function logic
+    print("\n📂 LOADING AND VALIDATING DATA")
+    print("-" * 50)
+    
+    # Load data
+    data_file = "us_stocks_5years_with_fundamentals.csv"
+    
+    if not os.path.exists(data_file):
+        print(f"❌ Data file '{data_file}' not found!")
+        print("📝 Creating synthetic data for demonstration...")
+        
+        # Create synthetic data for demonstration
+        test_suite = TradingPredictorTests()
+        df = test_suite.create_sample_data(n_samples=5000, n_tickers=10)
+        print(f"✅ Created synthetic data. Shape: {df.shape}")
+        
+        # Save synthetic data
+        df.to_csv("synthetic_stock_data.csv", index=False)
+        data_file = "synthetic_stock_data.csv"
+    else:
+        print(f"📂 Loading data from {data_file}...")
+        try:
+            df = pd.read_csv(data_file)
+            print(f"✅ Data loaded successfully. Shape: {df.shape}")
+            
+            # Sample data if too large
+            if len(df) > 100000:
+                print("📊 Sampling data for processing...")
+                tickers = df['Ticker'].unique()
+                sampled_tickers = np.random.choice(tickers, size=min(10, len(tickers)), replace=False)
+                df = df[df['Ticker'].isin(sampled_tickers)].copy()
+                print(f"📊 Sampled data shape: {df.shape}")
+                
+        except Exception as e:
+            print(f"❌ Error loading data: {e}")
+            return
+    
+    # Validate input data
+    try:
+        required_columns = ['Date', 'Ticker', 'Close', 'Volume']
+        validate_input_data(df, required_columns)
+        print("✅ Data validation passed")
+    except ValueError as e:
+        print(f"❌ Data validation failed: {e}")
+        return
+    
+    # Data exploration
+    if predictor.data_explorer:
+        print("\n🔍 COMPREHENSIVE DATA EXPLORATION")
+        print("-" * 50)
+        
+        # Dataset overview
+        overview = predictor.data_explorer.explore_dataset_overview(df, save_plots=True)
+        print(f"📊 Dataset overview completed. Found {len(overview['numeric_columns'])} numeric features")
+        
+        # Correlation analysis
+        correlation_results = predictor.data_explorer.analyze_correlations(
+            df, target_col=None, threshold=0.8, save_plots=True
+        )
+        if correlation_results:
+            print(f"🔗 Correlation analysis completed. Found {correlation_results['correlation_stats']['highly_correlated_pairs_count']} highly correlated pairs")
+    
+    # Continue with the rest of the original pipeline
+    print("\n🔧 COMPREHENSIVE FEATURE ENGINEERING")
+    print("-" * 50)
+    df_features = predictor.comprehensive_feature_engineering(df)
+    
+    print("\n🎯 ACTIONABLE TARGET CREATION")
+    print("-" * 50)
+    df_with_targets = predictor.create_actionable_targets(
+        df_features,
+        target_buy_pct=predictor.config['target_buy_pct'],
+        target_sell_pct=predictor.config['target_sell_pct']
+    )
+    
+    print("\n🎓 ENHANCED TRAINING & EVALUATION")
+    print("-" * 50)
+    pipeline_results = predictor.train_and_evaluate_actionable(df_with_targets)
+    
+    # Save all results and artifacts
+    if predictor.experiment_logger:
+        print("\n💾 SAVING EXPERIMENT ARTIFACTS")
+        print("-" * 50)
+        
+        # Save results
+        predictor.experiment_logger.save_artifact(
+            pipeline_results['results'], 'model_results.csv', 'csv'
+        )
+        
+        # Save best model
+        if 'best_model' in pipeline_results and pipeline_results['best_model']:
+            predictor.experiment_logger.save_artifact(
+                pipeline_results['best_model'], 'best_model.pkl', 'pickle'
+            )
+        
+        # Save preprocessing artifacts
+        predictor.experiment_logger.save_artifact(
+            pipeline_results['preprocessing_info'], 'preprocessing_info.json', 'json'
+        )
+        
+        # Log final metrics
+        if not pipeline_results['results'].empty:
+            best_metrics = pipeline_results['results'].iloc[0].to_dict()
+            predictor.experiment_logger.log_metrics(best_metrics)
+        
+        # Finalize experiment
+        metadata_path = predictor.experiment_logger.finalize_experiment()
+        print(f"📋 Experiment metadata saved: {metadata_path}")
+    
+    # Display enhanced results (using the existing display logic)
+    print("\n📊 ENHANCED RESULTS SUMMARY")
+    print("-" * 50)
+    results_df = pipeline_results['results']
+    
+    if not results_df.empty:
+        # Show key metrics
+        key_metrics = []
+        for prefix in ['test_', 'val_', '']:
+            for metric in ['accuracy', 'balanced_accuracy', 'f1_macro', 'actionability_score']:
+                col_name = f"{prefix}{metric}" if prefix else metric
+                if col_name in results_df.columns:
+                    key_metrics.append(col_name)
+        
+        if 'final_combined_score' in results_df.columns:
+            key_metrics.append('final_combined_score')
+        
+        available_metrics = [m for m in key_metrics if m in results_df.columns]
+        if available_metrics:
+            print("🏆 Model Performance Summary:")
+            print(results_df[available_metrics].round(4))
+        
+        # Best model summary
+        best_model = results_df.iloc[0]
+        print(f"\n🏆 Best Model: {results_df.index[0]}")
+        
+        # Find best available metrics
+        for metric_type in ['test_', 'val_', '']:
+            accuracy_key = f"{metric_type}accuracy"
+            if accuracy_key in best_model and pd.notna(best_model[accuracy_key]):
+                print(f"📊 Accuracy ({accuracy_key}): {best_model[accuracy_key]:.4f} ({best_model[accuracy_key]*100:.2f}%)")
+                break
+        
+        for metric_type in ['test_', 'val_', '']:
+            f1_key = f"{metric_type}f1_macro"
+            if f1_key in best_model and pd.notna(best_model[f1_key]):
+                print(f"📊 F1-Score ({f1_key}): {best_model[f1_key]:.4f}")
+                break
+        
+        for metric_type in ['test_', 'val_', '']:
+            actionability_key = f"{metric_type}actionability_score"
+            if actionability_key in best_model and pd.notna(best_model[actionability_key]):
+                print(f"📊 Actionability ({actionability_key}): {best_model[actionability_key]:.4f}")
+                break
+    
+    print(f"\n🎉 ENHANCED PIPELINE COMPLETED SUCCESSFULLY!")
+    print("📊 All artifacts saved to experiment directory")
+    print("🔬 Ready for IEEE publication analysis")
+    
+    return pipeline_results
+
+def main_original():
     """Main function for actionable stock prediction"""
     print("🚀 ACTIONABLE STOCK PREDICTION SYSTEM")
     print("=" * 60)
