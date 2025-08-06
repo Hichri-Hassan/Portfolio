@@ -137,7 +137,11 @@ def validate_input_data(df: pd.DataFrame, required_columns: List[str],
     if df.select_dtypes(include=[np.number]).empty:
         raise ValueError("No numeric columns found in dataset")
     
-    logger.info(f"Input validation passed. Shape: {df.shape}")
+    # Only log if logger is available
+    try:
+        logger.info(f"Input validation passed. Shape: {df.shape}")
+    except NameError:
+        print(f"Input validation passed. Shape: {df.shape}")
 
 def set_random_seeds(seed: int = RANDOM_SEED) -> None:
     """
@@ -167,7 +171,11 @@ def set_random_seeds(seed: int = RANDOM_SEED) -> None:
     except ImportError:
         pass
     
-    logger.info(f"Random seeds set to {seed}")
+    # Only log if logger is available
+    try:
+        logger.info(f"Random seeds set to {seed}")
+    except NameError:
+        print(f"Random seeds set to {seed}")
 
 class ExperimentLogger:
     """
@@ -213,17 +221,19 @@ class ExperimentLogger:
             'artifacts': []
         }
         
-        logger.info(f"Initialized experiment: {self.experiment_id}")
+        # Use module logger for this class
+        self.logger = logging.getLogger(f'{__name__}.ExperimentLogger')
+        self.logger.info(f"Initialized experiment: {self.experiment_id}")
     
     def log_parameters(self, params: Dict[str, Any]) -> None:
         """Log experiment parameters."""
         self.metadata['parameters'].update(params)
-        logger.info(f"Logged parameters: {list(params.keys())}")
+        self.logger.info(f"Logged parameters: {list(params.keys())}")
     
     def log_metrics(self, metrics: Dict[str, float]) -> None:
         """Log experiment metrics."""
         self.metadata['metrics'].update(metrics)
-        logger.info(f"Logged metrics: {list(metrics.keys())}")
+        self.logger.info(f"Logged metrics: {list(metrics.keys())}")
     
     def save_artifact(self, obj: Any, filename: str, artifact_type: str = "pickle") -> str:
         """
@@ -257,11 +267,11 @@ class ExperimentLogger:
                 'timestamp': datetime.now().isoformat()
             })
             
-            logger.info(f"Saved artifact: {filename}")
+            self.logger.info(f"Saved artifact: {filename}")
             return str(filepath)
             
         except Exception as e:
-            logger.error(f"Failed to save artifact {filename}: {e}")
+            self.logger.error(f"Failed to save artifact {filename}: {e}")
             raise
     
     def save_plot(self, fig: plt.Figure, filename: str, dpi: int = 300) -> str:
@@ -275,7 +285,7 @@ class ExperimentLogger:
             'timestamp': datetime.now().isoformat()
         })
         
-        logger.info(f"Saved plot: {filename}")
+        self.logger.info(f"Saved plot: {filename}")
         return str(filepath)
     
     def finalize_experiment(self) -> str:
@@ -285,7 +295,7 @@ class ExperimentLogger:
         with open(metadata_path, 'w') as f:
             json.dump(self.metadata, f, indent=2, default=str)
         
-        logger.info(f"Experiment finalized: {self.experiment_id}")
+        self.logger.info(f"Experiment finalized: {self.experiment_id}")
         return str(metadata_path)
 
 class TradingPredictorTests:
