@@ -1,6 +1,30 @@
 import pandas as pd
 import numpy as np
 from scipy.stats import skew, kurtosis
+import logging
+
+logger = logging.getLogger("features")
+
+# Add set_random_seeds utility here for modular use
+
+def set_random_seeds(seed: int = 42):
+    np.random.seed(seed)
+    try:
+        import random
+        random.seed(seed)
+    except ImportError:
+        pass
+    try:
+        import tensorflow as tf
+        tf.random.set_seed(seed)
+    except ImportError:
+        pass
+    try:
+        import torch
+        torch.manual_seed(seed)
+    except ImportError:
+        pass
+    logger.info(f"Random seeds set to {seed}")
 
 def comprehensive_feature_engineering(df):
     """Enhanced feature engineering with advanced technical indicators and statistical features"""
